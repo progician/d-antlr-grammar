@@ -134,11 +134,25 @@ public class ParserTest {
 			else {
 				String stringTree = node.toStringTree(); 
 				if (commentLine.equals(stringTree) == false) {
-					System.err.println();
-					System.err.println(fileName + ":" + Integer.toString(codeLine) + ": error: code line produces different AST than specified");
-					System.err.println("    -> declDef: " + stringTree);
-					System.err.println("    ->     AST: " + commentLine);
-					ret = CheckReturn.ERROR;
+					if (commentLine.length() == stringTree.length()) {
+						for (int charIdx = 0; charIdx < commentLine.length(); charIdx++) {
+							if (commentLine.charAt(charIdx) != stringTree.charAt(charIdx)) {
+								System.err.println();
+								System.err.println(fileName + ":" + Integer.toString(codeLine) + ": error: code line produces different AST than specified");
+								System.err.println("    -> declDef: " + stringTree);
+								System.err.println("    ->        AST: " + commentLine);
+								ret = CheckReturn.ERROR;
+								break;
+							}
+						}
+					}
+					else {
+						System.err.println();
+						System.err.println(fileName + ":" + Integer.toString(codeLine) + ": error: code line produces different AST than specified");
+						System.err.println("    -> declDef: " + stringTree);
+						System.err.println("    ->        AST: " + commentLine);
+						ret = CheckReturn.ERROR;
+					}
 				}
 			}
 		}
@@ -154,6 +168,8 @@ public class ParserTest {
 			
 			res += desc.charAt(idx);
 		}
+		
+		res = res.trim();
 		
 		return res;
 	}

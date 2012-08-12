@@ -15,6 +15,7 @@ tokens {
   DEF_SYMBOL ;
   REF_IDENTIFIER ;
   REF_QUALIFIED ;
+  REF_MODULE ;
   TEMPLATE_INSTANCE ;
   AST_NEONODE_ARRAYVIEW ;
   INITIALIZER_VOID ;
@@ -36,10 +37,38 @@ tokens {
   MODULE_DECLARATION = 'module' ;
   MODULE_SYMBOL ;
   FUNC_PARAM ;
-  DECL_IMPORT = 'import' ;
-  IMPORT_LIST ;
+  DECL_IMPORT ;
+  IMPORT_FRAGMENT ;
   IMPORT_CONTENT ;
   IMPORT_ALIAS ;
+  IMPORT_BINDING ;
+  ENUM_DECLARATION = 'enum' ;
+  ENUM_MEMBER ;
+  CLASS_DECLARATION = 'class' ;
+  BASE_CLASSES ;
+  BASE_CLASS ;
+  INVARIANT = 'invariant' ;
+  INTERFACE_DECLARATION = 'interface' ;
+  BLOCK_STATEMENT ;
+  STRUCT_DECLARATION = 'struct' ;
+  UNION_DECLARATION = 'union' ;
+  DEF_CTOR ;
+  UNITTEST_DECLARATION = 'unittest' ;
+  CONDITIONAL_DECL_DV ;
+  DECLARATION_BLOCK ;
+  SYMBOL ;
+  DV_SPEC ;
+  STATIC_ASSERT ;
+  TEMPLATE_DECLARATION = 'template' ;
+  TEMPLATE_PARAM_LIST ;
+  TEMPLATE_PARAM_TYPE ;
+  TEMPLATE_PARAM_VALUE ;
+  TEMPLATE_PARAM_ALIAS ;
+  TEMPLATE_PARAM_TUPLE ;
+  TEMPLATE_PARAM_THIS ;
+  TEMPLATE_MIXIN_DECLARATION ;
+  TEMPLATE_MIXIN ;
+  MIXIN_DECLARATION ;
 }
 
 @lexer::header {
@@ -153,6 +182,8 @@ fragment Float
                   )
   | '.' DecimalDigits DecimalExponent?
   ;
+
+
   
 // ================ PARSER ================ 
 
@@ -170,14 +201,25 @@ moduleFullyQualifiedName
   ;
   
 declarationBlock
-  : declDef
-  | '{'! declDef* '}'!
+  : (declDef | '{' declDef* '}') -> ^(DECLARATION_BLOCK declDef*)
   ;
 
 declDef
   : ('static' 'import')=> (importDeclaration)
-  | (declaration)=> (declaration)
-  | (importDeclaration)=> (importDeclaration)
+  | importDeclaration
+  | enumDeclaration
+  | classDeclaration
+  | interfaceDeclaration
+  | aggregateDeclaration
+  | declaration
+  | ctorDeclaration
+  | unittestDeclaration
+  | conditionalDeclaration
+  | dvSpecification
+  | staticAssert
+  | templateDeclaration
+  | templateMixinDeclaration
+  | mixinDeclaration
   ;
   
 declaration
@@ -203,14 +245,18 @@ autoVariable
 decl
   : type defSymbol
     ( '[' ']' initializer? ->  ^(DEF_VAR ^(TYPE_DYN_ARRAY type) defSymbol initializer?)
-    | '[' primaryExpression ']' initializer? -> ^(DEF_VAR ^(TYPE_STATIC_ARRAY primaryExpression type) defSymbol initializer?)
+    | '[' assignExpression ']' initializer? -> ^(DEF_VAR ^(TYPE_STATIC_ARRAY assignExpression type) defSymbol initializer?)
     | initializer? ';' -> ^(DEF_VAR type defSymbol initializer?)
-    | parameters functionBody -> ^(DEF_FUNC defSymbol type parameters functionBody) 
+    | parameters (functionBody | ';') -> ^(DEF_FUNC defSymbol type parameters functionBody?) 
     )
   ;
   
 defSymbol
   : Identifier -> ^(DEF_SYMBOL[$Identifier])
+  ;
+  
+symbol
+  : Identifier -> ^(SYMBOL[$Identifier])
   ;
   
 initializer
@@ -225,7 +271,7 @@ voidInitializer
   ;
   
 nonVoidInitializer
-  : primaryExpression -> ^(INITIALIZER_EXP primaryExpression)
+  : assignExpression -> ^(INITIALIZER_EXP assignExpression)
   ;
   
 primaryExpression
@@ -305,8 +351,8 @@ type
   : ( basicType -> basicType )
 	  ( '*' -> ^(TYPE_POINTER basicType)
 	  | '[' ']' -> ^(TYPE_DYN_ARRAY basicType)
-	  | '[' primaryExpression ']' -> ^(TYPE_STATIC_ARRAY primaryExpression basicType)
-	  | '[' primaryExpression '..' primaryExpression ']' -> ^(REF_TYPE_SLICE primaryExpression primaryExpression basicType)
+	  | '[' assignExpression ']' -> ^(TYPE_STATIC_ARRAY assignExpression basicType)
+	  | '[' assignExpression '..' assignExpression ']' -> ^(REF_TYPE_SLICE assignExpression assignExpression basicType)
 	  // | '[' type ']' -> ^(TYPE_MAP_ARRAY type basicType)
 	  // FIX: Ambuiguity between TYPE_MAP_ARRAY and TYPE_STATIC_ARRAY, as the primaryExpression and the type can both be Identifier.
 	  )?
@@ -322,7 +368,7 @@ parameters
   
 parameter
   : ParameterAttribute? type defSymbol defaultInitializerExpression?
-      -> ^(FUNC_PARAM type ParameterAttribute? defaultInitializerExpression?)
+      -> ^(FUNC_PARAM type defSymbol ParameterAttribute? defaultInitializerExpression?)
   ;
   
 functionBody
@@ -334,13 +380,229 @@ defaultInitializerExpression
   | '__FILE__'
   | '__LINE__'
   ;
+
   
-// ================ DECLARATIONS ================
+// ================ IMPORT ================
 
 importDeclaration
-  : 'static'? DECL_IMPORT importEntry -> ^(DECL_IMPORT importEntry 'static'?) 
+  : 'static'? 'import' importFragment (',' importFragment)* ';' -> ^(DECL_IMPORT importFragment* 'static'?) 
+  ;
+  
+importFragment
+  : importEntry -> importEntry
+  | importEntry ':' Identifier -> ^(IMPORT_BINDING importEntry Identifier)
   ;
   
 importEntry
-  : moduleFullyQualifiedName -> ^(IMPORT_CONTENT moduleFullyQualifiedName)
+  : (Identifier '=')=> (Identifier '=' refModule -> ^(IMPORT_ALIAS ^(REF_MODULE Identifier) refModule))
+  | refModule -> ^(IMPORT_CONTENT refModule)
+  ;
+  
+refModule
+  : Identifier ('.' Identifier)* -> ^(REF_MODULE Identifier*)
+  ;
+
+
+// ================ ENUM ================
+
+  enumDeclaration
+    : ENUM_DECLARATION^ defSymbol?  (':'! type)? enumBody 
+    ;
+    
+  enumBody
+    : '{'! enumMembers '}'!
+    | ';'!
+    ;
+    
+  enumMembers
+    : enumMember ( ','! enumMember)*
+    ;
+    
+  enumMember
+    : defSymbol ('=' primaryExpression)? -> ^(ENUM_MEMBER defSymbol primaryExpression?)
+    ;
+
+    
+// ================ CLASS ================
+
+ classDeclaration
+  : CLASS_DECLARATION^ defSymbol baseClassList? classBody
+  ;
+  
+baseClassList
+  : ':' identifierList (',' identifierList)* -> ^(BASE_CLASSES ^(BASE_CLASS identifierList)*) 
+  ;
+
+classBody
+  : '{'! classMember* '}'!
+  ;
+  
+classMember
+  : declDef
+  | classAllocator
+  | classDeallocator
+  | invariant
+  ;
+  
+classAllocator
+  : 'new' parameters functionBody -> ^(DEF_CTOR["new"] parameters functionBody)
+  ;
+  
+classDeallocator
+  : 'delete' parameters functionBody -> ^(DEF_CTOR["delete"] parameters functionBody)
+  ;
+  
+invariant
+  : INVARIANT^ '('! ')'! blockStatement 
+  ;
+
+  
+// ================ INTERFACE ================
+
+interfaceDeclaration
+  : INTERFACE_DECLARATION^ defSymbol baseClassList? interfaceBody
+  ;
+  
+interfaceBody
+  : '{'! declDef* '}'!
+  ;
+
+  
+//================ STRUCT & UNION ================
+  
+aggregateDeclaration
+  : (STRUCT_DECLARATION^ | UNION_DECLARATION^) defSymbol (';'! | structBody)
+  ;
+    
+ structBody
+  : '{'! structMember* '}'!
+  ;
+
+structMember
+  : declDef
+  | classAllocator
+  | classDeallocator
+  ;
+
+
+//================ OTHER DECLARATIONS  ================
+
+ctorDeclaration
+  : 'this' parameters functionBody -> ^(DEF_CTOR["this"] parameters functionBody)
+  | '~this' '(' ')' functionBody -> ^(DEF_CTOR["~this"] PARAMETER_LIST functionBody)
+  ;
+  
+
+unittestDeclaration
+  : UNITTEST_DECLARATION^  blockStatement
+  ;
+  
+mixinDeclaration
+  : 'mixin' '(' assignExpression ')' ';'-> ^(MIXIN_DECLARATION assignExpression)
+  ;
+  
+//================ CONDITIONAL DECLARATIONS  ================
+
+conditionalDeclaration
+  : conditionalDeclarationDV
+  | conditionalDeclarationStaticIf
+  ;
+  
+conditionalDeclarationDV
+  : ('version' | 'debug') '(' symbol ')' declarationBlock
+    ( ('else')=> 'else' declarationBlock)?
+     -> ^(CONDITIONAL_DECL_DV[$start] symbol declarationBlock*)
+  ;
+
+conditionalDeclarationStaticIf
+  : 'static' 'if' '(' assignExpression ')' declarationBlock
+    ( ('else')=> 'else' declarationBlock)?
+    -> ^(CONDITIONAL_DECL_DV["static if"] assignExpression declarationBlock*)
+  ;
+  
+dvSpecification
+  : ('version' | 'debug') '=' symbol ';' -> ^(DV_SPEC[$start] symbol)
+  ;
+  
+staticAssert
+  : 'static' 'assert' '(' assignExpression (',' assignExpression)? ')' ';'
+    -> ^(STATIC_ASSERT assignExpression*)
+  ;
+
+
+//================ TEMPLATE DECLARATIONS  ================
+
+templateDeclaration
+  : TEMPLATE_DECLARATION^
+    defSymbol '('! templateParameterList ')'!
+    constraint?
+    templateDeclarationBlock
+  ;
+  
+templateParameterList
+  :  ( templateParameter (',' templateParameter)* )? -> ^(TEMPLATE_PARAM_LIST templateParameter*)
+  ;
+  
+templateParameter
+  : templateTypeParameter
+  | templateValueParameter
+  | templateAliasParameter
+  | templateTupleParameter
+  | templateThisParameter
+  ;
+  
+templateTypeParameter
+  : defSymbol (':' type)? ('=' type)? -> ^(TEMPLATE_PARAM_TYPE defSymbol type*)
+  ;
+  
+templateValueParameter
+  : type defSymbol (':' conditionalExpression)? ('=' assignExpression)?
+    -> ^(TEMPLATE_PARAM_VALUE defSymbol type conditionalExpression? assignExpression?)
+  ;
+  
+templateAliasParameter
+  : 'alias' type? defSymbol
+    (':' ( (type)=>(type) | conditionalExpression) )?
+    ('=' ( (type)=>(type) | conditionalExpression) )?
+    -> ^(TEMPLATE_PARAM_ALIAS defSymbol)
+  ;
+  
+templateTupleParameter
+  : defSymbol '...' -> ^(TEMPLATE_PARAM_TUPLE defSymbol)
+  ;
+  
+templateThisParameter
+  : 'this' templateTypeParameter -> ^(TEMPLATE_PARAM_THIS templateTypeParameter)
+  ;
+  
+constraint
+  : 'if'! '('! expression ')'! 
+  ;
+  
+templateDeclarationBlock
+  : '{' declDef* '}' -> ^(DECLARATION_BLOCK declDef*)
+  ;
+  
+templateMixinDeclaration
+  : 'mixin' templateDeclaration -> ^(TEMPLATE_MIXIN_DECLARATION templateDeclaration)
+  ;
+  
+templateMixin
+  : 'mixin' type Identifier? -> ^(TEMPLATE_MIXIN type Identifier?)
+  ;
+
+blockStatement
+  : '{' '}' -> ^(BLOCK_STATEMENT)
+  ;
+  
+assignExpression
+  : primaryExpression
+  ;
+  
+conditionalExpression
+  : assignExpression
+  ;
+
+expression
+  : conditionalExpression
   ;
