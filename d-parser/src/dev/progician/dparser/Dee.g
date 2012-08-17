@@ -6,8 +6,8 @@ options {
 }
 
 tokens {
+  NULL_NODE ;
   MODULE ;
-  INFIX ;
   DEF_FUNC ;
   DEF_VAR ;
   AUTO_VAR ;
@@ -27,6 +27,8 @@ tokens {
   EXP_LITERAL_NULL = 'null' ;
   EXP_LITERAL_FILE = '__FILE__' ;
   EXP_LITERAL_LINE = '__LINE__' ;
+  EXP_LITERAL_FUNCTION ;
+  EXP_LITERAL_IMPORTEDSTRING ;
   TYPE_POINTER ;
   TYPE_DYN_ARRAY ;
   TYPE_STATIC_ARRAY ;
@@ -49,7 +51,6 @@ tokens {
   BASE_CLASS ;
   INVARIANT = 'invariant' ;
   INTERFACE_DECLARATION = 'interface' ;
-  BLOCK_STATEMENT ;
   STRUCT_DECLARATION = 'struct' ;
   UNION_DECLARATION = 'union' ;
   DEF_CTOR ;
@@ -69,6 +70,29 @@ tokens {
   TEMPLATE_MIXIN_DECLARATION ;
   TEMPLATE_MIXIN ;
   MIXIN_DECLARATION ;
+  INFIX ;
+  PREFIX ;
+  POSTFIX ;
+  EXP_REFERENCE ;
+  EXP_CONDITIONAL ;
+  EXP_NEW = 'new' ;
+  EXP_DELETE = 'delete' ;
+  EXP_CAST = 'cast' ;
+  EXP_CALL ;
+  EXP_INDEX ;
+  EXP_SLICE ;
+  EXP_DOLLAR = '$' ;
+  EXP_ASSERT = 'assert' ;
+  EXP_MIXIN = 'mixin' ;
+  EXP_TYPEID = 'typeid' ;
+  EXP_TYPEOF = 'typeof' ;
+  EXP_TRAITS = '__traits' ;
+  EXP_IS = 'is' ;
+  CAST_QUALIFIER ;
+  ARG_LIST ;
+  STMT_BLOCK ;
+  STMT_EXPRESSION ;
+  STMT_RETURN = 'return' ;
 }
 
 @lexer::header {
@@ -247,8 +271,18 @@ decl
     ( '[' ']' initializer? ->  ^(DEF_VAR ^(TYPE_DYN_ARRAY type) defSymbol initializer?)
     | '[' assignExpression ']' initializer? -> ^(DEF_VAR ^(TYPE_STATIC_ARRAY assignExpression type) defSymbol initializer?)
     | initializer? ';' -> ^(DEF_VAR type defSymbol initializer?)
-    | parameters (functionBody | ';') -> ^(DEF_FUNC defSymbol type parameters functionBody?) 
+    | parameters memberFunctionAttribute* (functionBody | ';') -> ^(DEF_FUNC defSymbol type parameters functionBody?) 
     )
+  ;
+  
+memberFunctionAttribute
+  : 'const' | 'immutable' | 'inout' | 'shared'
+  | functionAttribute
+  ;
+  
+functionAttribute
+  : 'nothrow' | 'pure'
+  | property
   ;
   
 defSymbol
@@ -274,22 +308,10 @@ nonVoidInitializer
   : assignExpression -> ^(INITIALIZER_EXP assignExpression)
   ;
   
-primaryExpression
-  : IntegerLiteral
-  | FloatLiteral
-  | CharacterLiteral
-  | StringLiteral
-  | EXP_THIS
-  | EXP_SUPER
-  | EXP_LITERAL_NULL
-  | refIdentifier
-  | '.' refIdentifier
-  ;
-  
 basicType
   : basicTypeX -> ^(REF_IDENTIFIER basicTypeX)
-  | identifierList
   | '.' identifierList -> ^(REF_QUALIFIED identifierList)
+  | identifierList 
   ;
   
 basicTypeX
@@ -310,10 +332,10 @@ refIdentifier
   ;
   
 templateInstance
-  : Identifier '!' templateSingleArgument
-      -> ^(TEMPLATE_INSTANCE Identifier templateSingleArgument)
-  | Identifier '!' '(' templateArgumentList ')'
-      -> ^(TEMPLATE_INSTANCE Identifier templateArgumentList)
+  : refIdentifier '!' templateSingleArgument
+      -> ^(TEMPLATE_INSTANCE refIdentifier templateSingleArgument)
+  | refIdentifier '!' '(' templateArgumentList ')'
+      -> ^(TEMPLATE_INSTANCE refIdentifier templateArgumentList)
   ;
   
 templateSingleArgument
@@ -338,23 +360,28 @@ templateArgument
   ;
   
 identifierList
-  : (refIdentifier -> refIdentifier
-    | templateInstance -> templateInstance
-    )
-    
-    ( '.' refIdentifier -> ^(REF_QUALIFIED $identifierList refIdentifier)
-    | '.' templateInstance -> ^(REF_QUALIFIED $identifierList templateInstance)
-    )*
+  : ( (Identifier '!')=> (templateInstance -> templateInstance)
+    | (refIdentifier -> refIdentifier)
+  	  ( options { greedy = true; } : '.'
+  	    ( (Identifier '!')=> (templateInstance -> ^(REF_QUALIFIED $identifierList templateInstance))
+		    | refIdentifier -> ^(REF_QUALIFIED $identifierList refIdentifier)
+		    )
+		  )*
+		)
   ;
   
 type
   : ( basicType -> basicType )
-	  ( '*' -> ^(TYPE_POINTER basicType)
-	  | '[' ']' -> ^(TYPE_DYN_ARRAY basicType)
-	  | '[' assignExpression ']' -> ^(TYPE_STATIC_ARRAY assignExpression basicType)
-	  | '[' assignExpression '..' assignExpression ']' -> ^(REF_TYPE_SLICE assignExpression assignExpression basicType)
-	  // | '[' type ']' -> ^(TYPE_MAP_ARRAY type basicType)
-	  // FIX: Ambuiguity between TYPE_MAP_ARRAY and TYPE_STATIC_ARRAY, as the primaryExpression and the type can both be Identifier.
+  
+	  ( options { greedy=true; }
+	  : '*' -> ^(TYPE_POINTER $type)
+	  | '[' (  -> ^(TYPE_DYN_ARRAY $type)
+	         | assignExpression
+	           ( -> ^(TYPE_STATIC_ARRAY assignExpression $type)
+	           | '..' assignExpression -> ^(REF_TYPE_SLICE assignExpression assignExpression $type)
+	           )
+	         )
+      ']'
 	  )?
   ;
   
@@ -372,14 +399,12 @@ parameter
   ;
   
 functionBody
-  : '{' declDef* '}' -> ^(FUNCTION_BODY declDef*)
+  : blockStatement
   ;
   
 defaultInitializerExpression
   : primaryExpression
-  | '__FILE__'
-  | '__LINE__'
-  ;
+   ;
 
   
 // ================ IMPORT ================
@@ -556,14 +581,25 @@ templateTypeParameter
   ;
   
 templateValueParameter
-  : type defSymbol (':' conditionalExpression)? ('=' assignExpression)?
+  : type defSymbol
+    (':' conditionalExpression)?
+    ('=' assignExpression)?
     -> ^(TEMPLATE_PARAM_VALUE defSymbol type conditionalExpression? assignExpression?)
   ;
   
 templateAliasParameter
   : 'alias' type? defSymbol
-    (':' ( (type)=>(type) | conditionalExpression) )?
-    ('=' ( (type)=>(type) | conditionalExpression) )?
+    (':' ( (Identifier '=>')=> (lambdaExpression)
+         | (type)=> (type)
+         | conditionalExpression
+         )
+    )?
+         
+    ('=' ( (Identifier '=>')=> (lambdaExpression)
+         | (type)=> (type)
+         | conditionalExpression
+         )
+    )?
     -> ^(TEMPLATE_PARAM_ALIAS defSymbol)
   ;
   
@@ -592,17 +628,269 @@ templateMixin
   ;
 
 blockStatement
-  : '{' '}' -> ^(BLOCK_STATEMENT)
+  : '{' '}' -> ^(STMT_BLOCK)
+  ;
+  
+//================ EXPRESSIONS  ================
+
+expression
+  : commaExpression
+  ;
+  
+commaExpression
+  : assignExpression
+    (',' assignExpression -> ^(INFIX[","] $commaExpression assignExpression))*
   ;
   
 assignExpression
-  : primaryExpression
-  ;
-  
-conditionalExpression
-  : assignExpression
+  : (conditionalExpression -> conditionalExpression)
+    ( options { greedy = true; }
+    : op='=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='+=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='-=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='*=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='/=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='%=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='&=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='|=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='^=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='~=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='<<=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='>>=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='>>>=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    | op='^^=' assignExpression -> ^(INFIX[$op] conditionalExpression assignExpression)
+    )?
   ;
 
-expression
-  : conditionalExpression
+conditionalExpression
+  : ( ororExpression -> ororExpression )
+    ( '?' conditionalExpression ':' conditionalExpression -> ^(EXP_CONDITIONAL ororExpression  conditionalExpression  conditionalExpression) )?
+  ;
+  
+ororExpression
+  : (andandExpression -> andandExpression)
+    ( '||' ororExpression -> ^(INFIX["||"] andandExpression ororExpression))?
+  ;
+  
+andandExpression
+  : (orCmpExpression -> orCmpExpression)
+    ( '&&' andandExpression -> ^(INFIX["&&"] orCmpExpression andandExpression))?
+  ;
+  
+orCmpExpression
+  : (xorExpression -> xorExpression)
+    ( '|' orCmpExpression -> ^(INFIX["|"] xorExpression orCmpExpression)
+    | '==' orCmpExpression -> ^(INFIX["=="] xorExpression orCmpExpression)
+    | '!=' orCmpExpression -> ^(INFIX["!="] xorExpression orCmpExpression)
+    | 'is' orCmpExpression -> ^(INFIX["is"] xorExpression orCmpExpression)
+    | '!is' orCmpExpression -> ^(INFIX["!is"] xorExpression orCmpExpression)
+    | '<' orCmpExpression -> ^(INFIX["<"] xorExpression orCmpExpression)
+    | '<=' orCmpExpression -> ^(INFIX["<="] xorExpression orCmpExpression)
+    | '>' orCmpExpression -> ^(INFIX[">"] xorExpression orCmpExpression)
+    | '>=' orCmpExpression -> ^(INFIX[">="] xorExpression orCmpExpression)
+    | '!<>=' orCmpExpression -> ^(INFIX["!<>="] xorExpression orCmpExpression)
+    | '<>' orCmpExpression -> ^(INFIX["<>"] xorExpression orCmpExpression)
+    | '<>=' orCmpExpression -> ^(INFIX["<>="] xorExpression orCmpExpression)
+    | '!>' orCmpExpression -> ^(INFIX["!>"] xorExpression orCmpExpression)
+    | '!>=' orCmpExpression -> ^(INFIX["!>="] xorExpression orCmpExpression)
+    | '!<' orCmpExpression -> ^(INFIX["!<"] xorExpression orCmpExpression)
+    | '!<=' orCmpExpression -> ^(INFIX["!<="] xorExpression orCmpExpression)
+    )?
+  ;
+  
+xorExpression
+  : (andExpression -> andExpression)
+    ( '^' xorExpression -> ^(INFIX["^"] andExpression xorExpression))?
+  ;
+  
+andExpression
+  : (shiftExpression -> shiftExpression)
+    ( '&' andExpression -> ^(INFIX["&"] shiftExpression andExpression))?
+  ;
+
+shiftExpression
+  : (addExpression -> addExpression)
+    ( '<<' shiftExpression -> ^(INFIX["<<"] addExpression shiftExpression)
+    | '>>' shiftExpression -> ^(INFIX[">>"] addExpression shiftExpression)
+    | '>>>' shiftExpression -> ^(INFIX[">>>"] addExpression shiftExpression)
+    )?
+  ;
+
+addExpression
+  : (mulExpression -> mulExpression)
+    ( '+' addExpression -> ^(INFIX["+"] mulExpression addExpression)
+    | '-' addExpression -> ^(INFIX["-"] mulExpression addExpression)
+    | '~' addExpression -> ^(INFIX["~"] mulExpression addExpression)
+    )?
+  ;
+  
+mulExpression
+  : (unaryExpression -> unaryExpression)
+    ( '*' mulExpression -> ^(INFIX["*"] unaryExpression mulExpression)
+    | '/' mulExpression -> ^(INFIX["/"] unaryExpression mulExpression)
+    | '%' mulExpression -> ^(INFIX["\%"] unaryExpression mulExpression)
+    )?
+  ;
+  
+unaryExpression
+  : ( powExpression -> powExpression
+    | '&' unaryExpression -> ^(PREFIX["&"] unaryExpression)
+    | '++' unaryExpression -> ^(PREFIX["++"] unaryExpression)
+    | '*' unaryExpression -> ^(PREFIX["*"] unaryExpression)
+    | '+' unaryExpression -> ^(PREFIX["+"] unaryExpression)
+    | '-' unaryExpression -> ^(PREFIX["-"] unaryExpression)
+    | '!' unaryExpression -> ^(PREFIX["!"] unaryExpression)
+    | '~' unaryExpression -> ^(PREFIX["~"] unaryExpression)
+    // | '(' type ')' '.' Identifier
+    | newExpression -> newExpression
+    | deleteExpression -> deleteExpression
+    | castExpression -> castExpression
+    )  
+  ;
+  
+newExpression
+  : EXP_NEW^
+    allocArgs? type ( '('! argumentList ')'! )?
+  ;
+
+allocArgs
+  : '('! argumentList ')'! 
+  ;
+  
+deleteExpression
+  :EXP_DELETE^ unaryExpression
+  ;
+  
+castExpression
+  : EXP_CAST^
+    '('! (type | castQual)? ')'! unaryExpression
+  ;
+  
+castQual
+  : castQualifier -> ^(CAST_QUALIFIER castQualifier)
+  ;
+  
+castQualifier
+  : 'const' 'shared'?
+  | 'shared' ('const'  | 'inout')?
+  | 'inout' 'shared'?
+  | 'immutable'
+  ;
+  
+powExpression
+  : (postFixExpression -> postFixExpression)
+    ( '^^' unaryExpression -> ^(INFIX["^^"] postFixExpression unaryExpression))?
+  ;
+  
+postFixExpression
+  : (primaryExpression -> primaryExpression)
+  
+	  ( options { greedy = true; }
+	  : '++' -> ^(POSTFIX["++"] $postFixExpression)
+	  | '--' -> ^(POSTFIX["--"] $postFixExpression)
+	  | '(' argumentList ')' -> ^(EXP_CALL $postFixExpression argumentList)
+	  | ( '[' assignExpression '..' )=> ('[' assignExpression '..' assignExpression ']'
+	        -> ^(EXP_SLICE $postFixExpression assignExpression assignExpression))
+	  | ( '[' assignExpression ',' )=> ('[' argumentList ']' -> ^(EXP_INDEX argumentList))
+	  | '.' Identifier -> ^(EXP_REFERENCE ^(REF_QUALIFIED $postFixExpression ^(REF_IDENTIFIER Identifier)))
+	  // Unimplemented syntax
+	  // | '.' newExpression -> ^()
+    | '!' ( templateSingleArgument -> ^(TEMPLATE_INSTANCE $postFixExpression templateSingleArgument)
+          | '(' templateArgumentList ')'-> ^(TEMPLATE_INSTANCE $postFixExpression templateArgumentList)
+          )
+	  )*
+  ;
+
+primaryExpression
+  : IntegerLiteral
+  | FloatLiteral
+  | CharacterLiteral
+  | StringLiteral
+  | EXP_THIS
+  | EXP_SUPER
+  | EXP_LITERAL_NULL
+  | ('.' Identifier '.')=> ('.' refIdentifier -> ^(REF_QUALIFIED refIdentifier))
+  | ('.' Identifier '!')=> ('.' refIdentifier -> ^(REF_QUALIFIED refIdentifier))
+  | '.' refIdentifier -> ^(EXP_REFERENCE ^(REF_QUALIFIED refIdentifier))
+  | (Identifier '.')=> (refIdentifier)
+  | (Identifier '!')=> (refIdentifier)
+  | (Identifier '=>')=> (lambdaExpression)
+  | refIdentifier -> ^(EXP_REFERENCE refIdentifier)
+  | EXP_DOLLAR
+  | EXP_LITERAL_FILE
+  | EXP_LITERAL_LINE
+  | (parameters '=>')=> (lambdaExpression)
+  | '('! assignExpression ')'!
+  | assertExpression
+  | mixinExpression
+  | typeOfExpression
+  | typeIdExpression
+  | functionLiteral
+  | importExpression
+  | isExpression
+  | traitsExpression
+  ;
+  
+assertExpression
+  : EXP_ASSERT^ '('! assignExpression (',' assignExpression)? ')'!
+  ;
+  
+mixinExpression
+  : EXP_MIXIN^ '('! assignExpression ')'!
+  ;
+  
+typeOfExpression
+  : EXP_TYPEOF '('! ( 'return' | expression) ')'!
+  ;
+  
+typeIdExpression
+  : EXP_TYPEID^ '('! expression ')'!
+  ;
+
+lambdaExpression
+  : Identifier '=>' assignExpression -> ^(EXP_LITERAL_FUNCTION ^(STMT_BLOCK ^(STMT_RETURN assignExpression)))
+  | parameters? functionAttribute* '=>' assignExpression
+    -> ^(EXP_LITERAL_FUNCTION parameters? ^(STMT_BLOCK ^(STMT_RETURN assignExpression)))
+  ;
+  
+functionLiteral
+  : ( 'function' | 'delegate') type? (parameters functionAttribute*)? functionBody
+     -> ^(EXP_LITERAL_FUNCTION type? parameters? functionBody)
+  ;
+  
+importExpression
+  : 'import' '(' assignExpression ')' -> ^(EXP_LITERAL_IMPORTEDSTRING assignExpression)
+  ;
+  
+isExpression
+  : EXP_IS^ '('! type (Identifier?)!
+    (':'! typeSpecialization |  '=='! typeSpecialization)
+    (',' templateParameterList)? ')'!
+  ;
+  
+typeSpecialization
+  : type
+  | 'struct' | 'union' | 'class'
+  | 'interface' | 'enum' | 'function'
+  | 'delegate' | 'super' | 'const'
+  | 'immutable' | 'inout' | 'shared'
+  | 'return'
+  ;
+  
+traitsExpression
+  : EXP_TRAITS '('!
+    ( 'isAbstractClass' | 'isArithmetic' | 'isAssociativeArray' | 'isFinalClass' 
+    | 'isFloating' | 'isIntegral' | 'isScalar' | 'isStaticArray' | 'isUnsigned' 
+    | 'isVirtualFunction' 'isAbstractFunction' | 'isFinalFunction' | 'isStaticFunction'
+    | 'isRef' | 'isOut' | 'isLazy' | 'hasMember' | 'identifier' | 'getMember'
+    | 'getOverloads'| 'getVirtualFunctions' | 'parent' | 'classInstanceSize' | 'allMembers'
+    | 'derivedMembers' | 'isSame' | 'compiles'
+    )
+    ( ','!  assignExpression | type )+
+    ')'!
+  ;
+
+argumentList
+  : (assignExpression (',' assignExpression)* )?
+      -> ^(ARG_LIST assignExpression*)
   ;

@@ -129,7 +129,7 @@ public class ParserTest {
 				ret = ret != CheckReturn.ERROR ? CheckReturn.WARNING : ret;
 				System.out.println();
 				System.out.println(fileName + ":" + Integer.toString(codeLine) + ": warning: code line missing AST description comment");
-				System.out.println("    -> declDef: " + node.toStringTree());
+				System.out.println("   -> declDef: " + node.toStringTree());
 			}
 			else {
 				String stringTree = node.toStringTree(); 
@@ -140,7 +140,7 @@ public class ParserTest {
 								System.err.println();
 								System.err.println(fileName + ":" + Integer.toString(codeLine) + ": error: code line produces different AST than specified");
 								System.err.println("    -> declDef: " + stringTree);
-								System.err.println("    ->        AST: " + commentLine);
+								System.err.println("    ->     AST: " + commentLine);
 								ret = CheckReturn.ERROR;
 								break;
 							}
@@ -150,7 +150,7 @@ public class ParserTest {
 						System.err.println();
 						System.err.println(fileName + ":" + Integer.toString(codeLine) + ": error: code line produces different AST than specified");
 						System.err.println("    -> declDef: " + stringTree);
-						System.err.println("    ->        AST: " + commentLine);
+						System.err.println("    ->     AST: " + commentLine);
 						ret = CheckReturn.ERROR;
 					}
 				}
