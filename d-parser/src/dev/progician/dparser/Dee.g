@@ -6,7 +6,7 @@ options {
 }
 
 tokens {
-  NULL_NODE ;
+  NULL ;
   MODULE ;
   DEF_FUNC ;
   DEF_VAR ;
@@ -20,10 +20,13 @@ tokens {
   AST_NEONODE_ARRAYVIEW ;
   INITIALIZER_VOID ;
   INITIALIZER_EXP ;
-  INTEGER_LITERAL ;
-  FLOAT_LITERAL ;
   EXP_THIS = 'this' ;
   EXP_SUPER = 'super' ;
+  EXP_LITERAL_BOOL ;
+  EXP_LITERAL_INTEGER ;
+  EXP_LITERAL_REAL ;
+  EXP_LITERAL_CHAR ;
+  EXP_LITERAL_STRING ;
   EXP_LITERAL_NULL = 'null' ;
   EXP_LITERAL_FILE = '__FILE__' ;
   EXP_LITERAL_LINE = '__LINE__' ;
@@ -55,7 +58,8 @@ tokens {
   UNION_DECLARATION = 'union' ;
   DEF_CTOR ;
   UNITTEST_DECLARATION = 'unittest' ;
-  CONDITIONAL_DECL_DV ;
+  CONDITIONAL_DECL ;
+  CONDITIONAL_COMPILATION_CONDITION ;
   DECLARATION_BLOCK ;
   SYMBOL ;
   DV_SPEC ;
@@ -93,6 +97,32 @@ tokens {
   STMT_BLOCK ;
   STMT_EXPRESSION ;
   STMT_RETURN = 'return' ;
+  STMT_CASE = 'case' ;
+  STMT_DEFAULT = 'default';
+  STMT_LABELED ;
+  STMT_DECLARATION ;
+  STMT_IF = 'if' ;
+  STMT_WHILE = 'while' ;
+  STMT_DO = 'do' ;
+  STMT_FOR = 'for' ;
+  STMT_FOREACH = 'foreach' ;
+  STMT_FOREACH_RANGE = 'foreach_range' ;
+  STMT_SWITCH = 'switch' ;
+  STMT_FINALSWITCH ;
+  STMT_CONTINUE = 'continue' ;
+  STMT_BREAK = 'break' ;
+  STMT_GOTO = 'goto' ;
+  STMT_WITH = 'with' ;
+  STMT_SYNCHRONIZED = 'synchronized' ;
+  STMT_TRY = 'try' ;
+  STMT_CATCH = 'catch' ;
+  STMT_FINALLY = 'finally' ;
+  STMT_THROW = 'throw' ;
+  STMT_SCOPE = 'scope' ;
+  STMT_ASM = 'asm' ;
+  STMT_PRAGMA = 'pragma' ;
+  STMT_MIXIN ;
+  STMT_CONDITIONAL ;
 }
 
 @lexer::header {
@@ -294,7 +324,7 @@ symbol
   ;
   
 initializer
-  : '='
+  : '='!
     ( voidInitializer
     | nonVoidInitializer
     )
@@ -339,13 +369,13 @@ templateInstance
   ;
   
 templateSingleArgument
-  : basicTypeX
+  : basicTypeX -> ^(REF_IDENTIFIER basicTypeX)
   | refIdentifier
-  | CharacterLiteral
-  | StringLiteral
-  | IntegerLiteral
-  | FloatLiteral
-  | BooleanLiteral
+  | CharacterLiteral -> ^(EXP_LITERAL_CHAR[$CharacterLiteral])
+  | StringLiteral -> ^(EXP_LITERAL_STRING[$StringLiteral])
+  | IntegerLiteral -> ^(EXP_LITERAL_INTEGER[$IntegerLiteral])
+  | FloatLiteral -> ^(EXP_LITERAL_REAL[$FloatLiteral])
+  | BooleanLiteral -> ^(EXP_LITERAL_BOOL[$BooleanLiteral])
   | EXP_LITERAL_NULL
   | EXP_LITERAL_FILE
   | EXP_LITERAL_LINE
@@ -356,7 +386,11 @@ templateArgumentList
   ;
   
 templateArgument
-  : type
+  // The first case covers basically any reference, without making it an EXP_REFERENCE expression, plus the pointer, array, map types
+  : (type)=> (type)
+  | assignExpression
+  // This doesn't make much sense! A symbol at this place would be interpreted as a reference anyway.
+  // | symbol
   ;
   
 identifierList
@@ -390,12 +424,16 @@ property
   ;
   
 parameters
-  : '(' ( parameter (',' parameter)* )? ')' -> ^(PARAMETER_LIST parameter*)  
+  : '('! parameterList ')'!  
+  ;
+  
+parameterList
+  : ( parameter (',' parameter)* )? -> ^(PARAMETER_LIST parameter*)
   ;
   
 parameter
-  : ParameterAttribute? type defSymbol defaultInitializerExpression?
-      -> ^(FUNC_PARAM type defSymbol ParameterAttribute? defaultInitializerExpression?)
+  : ParameterAttribute* type defSymbol defaultInitializerExpression?
+      -> ^(FUNC_PARAM type defSymbol ParameterAttribute* defaultInitializerExpression?)
   ;
   
 functionBody
@@ -529,22 +567,17 @@ mixinDeclaration
 //================ CONDITIONAL DECLARATIONS  ================
 
 conditionalDeclaration
-  : conditionalDeclarationDV
-  | conditionalDeclarationStaticIf
+  : condition declarationBlock
+    ( ('else')=> 'else' declarationBlock)?
+      -> ^(CONDITIONAL_DECL condition declarationBlock+)
   ;
   
-conditionalDeclarationDV
-  : ('version' | 'debug') '(' symbol ')' declarationBlock
-    ( ('else')=> 'else' declarationBlock)?
-     -> ^(CONDITIONAL_DECL_DV[$start] symbol declarationBlock*)
+condition
+  : 'version' '(' symbol ')' -> ^(CONDITIONAL_COMPILATION_CONDITION[$start] symbol)
+  | 'debug' '(' symbol ')' -> ^(CONDITIONAL_COMPILATION_CONDITION[$start] symbol)
+  | 'static' 'if' '(' assignExpression ')' -> ^(CONDITIONAL_COMPILATION_CONDITION["static if"] assignExpression)
   ;
 
-conditionalDeclarationStaticIf
-  : 'static' 'if' '(' assignExpression ')' declarationBlock
-    ( ('else')=> 'else' declarationBlock)?
-    -> ^(CONDITIONAL_DECL_DV["static if"] assignExpression declarationBlock*)
-  ;
-  
 dvSpecification
   : ('version' | 'debug') '=' symbol ';' -> ^(DV_SPEC[$start] symbol)
   ;
@@ -624,11 +657,11 @@ templateMixinDeclaration
   ;
   
 templateMixin
-  : 'mixin' type Identifier? -> ^(TEMPLATE_MIXIN type Identifier?)
+  : 'mixin' type (options { greedy=true; }: Identifier)? -> ^(TEMPLATE_MIXIN type Identifier?)
   ;
 
 blockStatement
-  : '{' '}' -> ^(STMT_BLOCK)
+  : '{' statement* '}' -> ^(STMT_BLOCK statement*)
   ;
   
 //================ EXPRESSIONS  ================
@@ -638,7 +671,7 @@ expression
   ;
   
 commaExpression
-  : assignExpression
+  : (assignExpression -> assignExpression)
     (',' assignExpression -> ^(INFIX[","] $commaExpression assignExpression))*
   ;
   
@@ -664,22 +697,25 @@ assignExpression
 
 conditionalExpression
   : ( ororExpression -> ororExpression )
-    ( '?' conditionalExpression ':' conditionalExpression -> ^(EXP_CONDITIONAL ororExpression  conditionalExpression  conditionalExpression) )?
+    ( options { greedy=true; }: '?' conditionalExpression  ':' conditionalExpression
+      -> ^(EXP_CONDITIONAL ororExpression conditionalExpression conditionalExpression)
+    )?
   ;
   
 ororExpression
   : (andandExpression -> andandExpression)
-    ( '||' ororExpression -> ^(INFIX["||"] andandExpression ororExpression))?
+    ( options { greedy=true; }: '||' ororExpression -> ^(INFIX["||"] andandExpression ororExpression) )?
   ;
   
 andandExpression
   : (orCmpExpression -> orCmpExpression)
-    ( '&&' andandExpression -> ^(INFIX["&&"] orCmpExpression andandExpression))?
+    ( options { greedy=true; }: '&&' andandExpression -> ^(INFIX["&&"] orCmpExpression andandExpression) )?
   ;
   
 orCmpExpression
   : (xorExpression -> xorExpression)
-    ( '|' orCmpExpression -> ^(INFIX["|"] xorExpression orCmpExpression)
+    ( options { greedy=true; }
+    : '|' orCmpExpression -> ^(INFIX["|"] xorExpression orCmpExpression)
     | '==' orCmpExpression -> ^(INFIX["=="] xorExpression orCmpExpression)
     | '!=' orCmpExpression -> ^(INFIX["!="] xorExpression orCmpExpression)
     | 'is' orCmpExpression -> ^(INFIX["is"] xorExpression orCmpExpression)
@@ -700,17 +736,18 @@ orCmpExpression
   
 xorExpression
   : (andExpression -> andExpression)
-    ( '^' xorExpression -> ^(INFIX["^"] andExpression xorExpression))?
+    ( options { greedy=true; }: '^' xorExpression -> ^(INFIX["^"] andExpression xorExpression) )?
   ;
   
 andExpression
   : (shiftExpression -> shiftExpression)
-    ( '&' andExpression -> ^(INFIX["&"] shiftExpression andExpression))?
+    ( options { greedy=true; }: '&' andExpression -> ^(INFIX["&"] shiftExpression andExpression) )?
   ;
 
 shiftExpression
   : (addExpression -> addExpression)
-    ( '<<' shiftExpression -> ^(INFIX["<<"] addExpression shiftExpression)
+    ( options { greedy=true; }
+    : '<<' shiftExpression -> ^(INFIX["<<"] addExpression shiftExpression)
     | '>>' shiftExpression -> ^(INFIX[">>"] addExpression shiftExpression)
     | '>>>' shiftExpression -> ^(INFIX[">>>"] addExpression shiftExpression)
     )?
@@ -718,7 +755,8 @@ shiftExpression
 
 addExpression
   : (mulExpression -> mulExpression)
-    ( '+' addExpression -> ^(INFIX["+"] mulExpression addExpression)
+    ( options { greedy=true; }
+    : '+' addExpression -> ^(INFIX["+"] mulExpression addExpression)
     | '-' addExpression -> ^(INFIX["-"] mulExpression addExpression)
     | '~' addExpression -> ^(INFIX["~"] mulExpression addExpression)
     )?
@@ -726,7 +764,8 @@ addExpression
   
 mulExpression
   : (unaryExpression -> unaryExpression)
-    ( '*' mulExpression -> ^(INFIX["*"] unaryExpression mulExpression)
+    ( options { greedy=true; }
+    : '*' mulExpression -> ^(INFIX["*"] unaryExpression mulExpression)
     | '/' mulExpression -> ^(INFIX["/"] unaryExpression mulExpression)
     | '%' mulExpression -> ^(INFIX["\%"] unaryExpression mulExpression)
     )?
@@ -750,7 +789,7 @@ unaryExpression
   
 newExpression
   : EXP_NEW^
-    allocArgs? type ( '('! argumentList ')'! )?
+    allocArgs? type ( options { greedy=true; }: '('! argumentList ')'! )?
   ;
 
 allocArgs
@@ -779,7 +818,7 @@ castQualifier
   
 powExpression
   : (postFixExpression -> postFixExpression)
-    ( '^^' unaryExpression -> ^(INFIX["^^"] postFixExpression unaryExpression))?
+    ( options { greedy=true; }: '^^' unaryExpression -> ^(INFIX["^^"] postFixExpression unaryExpression) )?
   ;
   
 postFixExpression
@@ -802,10 +841,10 @@ postFixExpression
   ;
 
 primaryExpression
-  : IntegerLiteral
-  | FloatLiteral
-  | CharacterLiteral
-  | StringLiteral
+  : IntegerLiteral -> ^(EXP_LITERAL_INTEGER[$IntegerLiteral])
+  | FloatLiteral -> ^(EXP_LITERAL_REAL[$FloatLiteral])
+  | CharacterLiteral -> ^(EXP_LITERAL_CHAR[$CharacterLiteral])
+  | StringLiteral -> ^(EXP_LITERAL_STRING[$StringLiteral])
   | EXP_THIS
   | EXP_SUPER
   | EXP_LITERAL_NULL
@@ -889,7 +928,261 @@ traitsExpression
     ( ','!  assignExpression | type )+
     ')'!
   ;
+  
+//================ STATEMENTS  ================
 
+statement
+  : ';'!
+  | nonEmptyStatement
+  | scopeBlockStatement
+  ;
+  
+noScopeNonEmptyStatement
+  : nonEmptyStatement
+  | blockStatement
+  ;
+
+noScopeStatement
+  : ';'!
+  | nonEmptyStatement
+  | blockStatement
+  ;
+  
+nonEmptyOrScopeBlockStatement
+  : nonEmptyStatement
+  | scopeBlockStatement
+  ;
+  
+nonEmptyStatement
+  : nonEmptyStatementNoCaseNoDefault
+  | caseStatement
+  // No need for it probably
+  // | caseRangeStatement
+  | defaultStatement
+  ;
+  
+nonEmptyStatementNoCaseNoDefault
+  : (Identifier ':')=> (labeledStatement)
+  | ('final' 'switch')=> (finalSwitchStatement)
+  | ('static' 'if')=> (conditionalStatement)
+  | ('static' 'assert')=> (staticAssert)
+  | (declarationStatement)=> (declarationStatement)
+  | ('mixin' '(')=> (expressionStatement)
+  | ('mixin' Identifier)=> (templateMixin)
+  | expressionStatement
+  | ifStatement
+  | whileStatement
+  | doStatement
+  | forStatement
+  | foreachStatement
+  | switchStatement
+  | finalSwitchStatement
+  | continueStatement
+  | breakStatement
+  | returnStatement
+  | gotoStatement
+  | withStatement
+  | synchronizedStatement
+  | tryStatement
+  | scopeGuardStatement
+  | throwStatement
+  | asmStatement
+  | pragmaStatement
+  // Big collision with the conditionalDeclaration. What's the real difference?
+  // Probably they should be unified as much as possible. Declarations and statements in this respect
+  // form a common set.
+  | conditionalStatement
+  ;
+  
+scopeBlockStatement
+  : blockStatement
+  ;
+  
+scopeStatementList
+  : ( options {greedy=true;}: statementNoCaseNoDefault)*
+  ;
+  
+statementNoCaseNoDefault
+  : ';'!
+  | nonEmptyStatementNoCaseNoDefault
+  | scopeBlockStatement
+  ;
+  
+scopeStatement
+  : nonEmptyStatement
+  | blockStatement
+  ;
+  
+caseStatement
+  : STMT_CASE^ argumentList ':'! scopeStatementList
+  ;
+  
+defaultStatement
+  : STMT_DEFAULT^ ':'! scopeStatementList
+  ;
+  
+labeledStatement
+  : (Identifier ':')=>
+      (Identifier ':' noScopeStatement -> ^(STMT_LABELED Identifier noScopeStatement))
+  ;
+  
+expressionStatement
+  : expression ';' -> ^(STMT_EXPRESSION expression)
+  ;
+  
+declarationStatement
+  : declaration
+  ;
+  
+ifStatement
+  : STMT_IF '(' ifCondition ')' scopeStatement
+    ( ('else')=> ('else' scopeStatement) )?
+    -> ^(STMT_IF ifCondition scopeStatement scopeStatement?)
+  ;
+  
+ifCondition
+  options { greedy=true; }: expression
+  // These cases should reflect the AST
+  | 'auto'! defSymbol! '='! expression
+  | type! defSymbol! '=' expression 
+  ;
+  
+whileStatement
+  : STMT_WHILE^ '('! expression ')'! scopeStatement
+  ;
+  
+doStatement
+  : STMT_DO^ scopeStatement 'while'! '('! expression ')'! ';'!
+  ;
+  
+//================ FOR ================
+  
+forStatement
+  : STMT_FOR^ '('! initialize forExp ';'! forExp ')'! scopeStatement
+  ;
+  
+initialize
+  : ';' -> ^(NULL)
+  | noScopeNonEmptyStatement
+  ;
+  
+forExp
+  : expression
+  | -> ^(NULL)
+  ;
+  
+foreachStatement
+  : ('foreach' '(' parameter ';' expression '..')=>
+      ( 'foreach' '(' parameter ';' expression '..' expression ')' noScopeNonEmptyStatement
+        -> ^(STMT_FOREACH_RANGE["fwd"] parameter expression expression noScopeNonEmptyStatement) )
+  | ('foreach_reverse' '(' parameter ';' expression '..')=>
+      ( 'foreach' '(' parameter ';' expression '..' expression ')' noScopeNonEmptyStatement
+        -> ^(STMT_FOREACH_RANGE["rev"] parameter expression expression noScopeNonEmptyStatement) )
+  | 'foreach' '(' parameterList ';' expression ')' noScopeNonEmptyStatement
+      -> ^(STMT_FOREACH["fwd"] parameterList expression noScopeNonEmptyStatement)
+  | 'foreach_reverse' '(' parameterList ';' expression ')' noScopeNonEmptyStatement
+      -> ^(STMT_FOREACH["rev"] parameterList expression noScopeNonEmptyStatement)
+  ;
+  
+//================ ... ================
+
+switchStatement
+  : STMT_SWITCH^ '('! expression ')'! scopeStatement
+  ;
+  
+finalSwitchStatement
+  : 'final' 'switch' '(' expression ')' scopeStatement
+    -> ^(STMT_FINALSWITCH expression scopeStatement) 
+  ;
+  
+continueStatement
+  : STMT_CONTINUE^ Identifier? ';'!
+  ;
+  
+breakStatement
+  : STMT_BREAK^ Identifier? ';'!
+  ;
+  
+returnStatement
+  : STMT_RETURN^ expression? ';'!
+  ;
+  
+gotoStatement
+  : STMT_GOTO^
+    ( symbol
+    | 'default'
+    | 'case' expression?
+    ) ';'!
+  ;
+  
+withStatement
+  : STMT_WITH^ '('!
+    ( (Identifier '!')=> (templateInstance)
+    | expression
+    ) ')'! scopeStatement
+  ;
+  
+synchronizedStatement
+  : STMT_SYNCHRONIZED^
+    ( options { greedy=true; }: '('! expression ')'! )?
+    scopeStatement
+  ;
+  
+//================ Try/Catch ================
+
+tryStatement
+  : STMT_TRY^ scopeStatement
+    catches (options { greedy=true; } : finallyStatement)?
+  ;
+  
+catches
+  : ( (STMT_CATCH '(')=> (normalCatch))* (options { greedy=true; } : lastCatch)?
+  ;
+  
+lastCatch
+  : STMT_CATCH^ noScopeNonEmptyStatement
+  ;
+  
+normalCatch
+  : STMT_CATCH^ '('! parameter ')'! noScopeNonEmptyStatement
+  ;
+  
+finallyStatement
+  : STMT_FINALLY^ noScopeNonEmptyStatement
+  ;
+  
+//================ ... ================
+
+throwStatement
+  : STMT_THROW^ expression ';'!
+  ;
+  
+scopeGuardStatement
+  : STMT_SCOPE^ '('!
+    ( 'exit' | 'success' | 'failure' )
+    ')'! nonEmptyOrScopeBlockStatement
+  ;
+  
+asmStatement
+  : STMT_ASM^
+    '{' /* Not parsed yet: http://dlang.org/iasm.html */ '}'
+  ;
+  
+pragmaStatement
+  : STMT_PRAGMA^ '('! symbol (','! argumentList)? ')'!
+    noScopeStatement
+  ;
+  
+mixinStatement
+  : mixinExpression ';' -> ^(STMT_MIXIN mixinExpression) 
+  ;
+  
+conditionalStatement
+  : condition noScopeNonEmptyStatement
+    ( ('else')=> ('else' noScopeNonEmptyStatement) )?
+      -> ^(STMT_CONDITIONAL condition noScopeNonEmptyStatement+)
+  ;
+  
 argumentList
   : (assignExpression (',' assignExpression)* )?
       -> ^(ARG_LIST assignExpression*)
