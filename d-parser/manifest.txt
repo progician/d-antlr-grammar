@@ -1,0 +1,2 @@
+Main-Class: dev.progician.dparser.ParserTest
+Class-Path: antlr-3.4-complete.jar
