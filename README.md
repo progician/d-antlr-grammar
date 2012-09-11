@@ -10,7 +10,7 @@ As a side-goal the project should be useful as a ground-work for a D expression 
 
 # Install
 
-The d-antlr-grammar project is essentially a simple Java test application for which you need to obtain the sources and build. As a requisite you'lln need the ANTLR parser generator. The currently working version is the v3.4.
+The d-antlr-grammar project is essentially a simple Java test application for which you need to obtain the sources and build. As a requisite you'lln need the ANTLR parser generator. The currently working version is the v3.4 which is included in the package and therefore there's no need for extra installation.
 
 You can check out the source code with the following command:
 
@@ -35,3 +35,33 @@ All you need to do is:
 cd d-parser
 java -jar dparser.jar
 ```
+
+The program will automatically run through the test-sources directory and test each line against the AST structure described in the comment line before.
+
+# Eclipse
+
+The source tree also contains the Eclipse project file so it is possible to build and run the parser tests. As the ANTLR 3.4 package is included in the repository there's no need for any changes, apart from a properly set JRE+JDK.
+
+# The AST Description Language
+
+For testing purposes a simple AST Description Language was developed. It provides an easy way to test the output of the parser. Basically, the language is used as a simplistic tree description somewhat very similar to LISP (LIst Processing). Tree's are basically lists embedded in to lists. The AST node's type's name constitutes a leaf, a single node. If there are no children to a node, it is described only by the type name. A simple return statement with no arguments would look like this:
+
+```
+STMT_RETURN
+```
+
+You can also test the actual text of the token against your expectations:
+
+```
+STMT_RETURN["return"]
+```
+
+In this case if the node's type is STMT_RETURN, then the program goes on and test the text against the string "return". This comes handy when you testing tokens like Identity, or literals.
+If a AST node has children it must be enclosed in to brackets:
+
+```
+// (STMT_RETURN EXP_INTEGER_LITERAL["0"])
+return 2;
+```
+
+That's about it! There are three interesting information about a parsed source code: the node types themselves, the relation or hierachy between the nodes, and their respective values. The program goes through the source files in the test-sources directory, parse them up, and goes through all the actual source lines (skipping through the comment lines), and check the previous comment line for the AST expectation line, just like in the source snippet above.
